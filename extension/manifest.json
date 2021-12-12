@@ -1,0 +1,31 @@
+{
+    "name": "Editor Buddy",
+    "manifest_version": 3,
+    "version": "0.1",
+    "description": "Adds shortcuts for editors",
+    "content_scripts": [
+        {
+            "matches": [
+                "https://*/*"
+            ],
+            "js": [
+                "jquery-3.6.0.min.js",
+                "content.js"
+            ]
+        }
+    ],
+    "icons": {
+        "48": "icon.png"
+    },
+    "permissions": [
+        "<all_urls>",
+        "debug"
+    ],
+    "action": {
+        "default_title": "Editor Buddy",
+        "default_icon": "icon.png"
+    },
+    "background": {
+        "service_worker": "background.js"
+    }
+}

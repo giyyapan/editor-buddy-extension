@@ -1,0 +1,18 @@
+{
+  "name": "editor-buddy",
+  "version": "0.0.1",
+  "description": "A chrome extension that allows you use custom cursor movement shortcuts in web editors.",
+  "main": "background.js",
+  "dependencies": {
+    "typescript": "^4.5.3"
+  },
+  "devDependencies": {
+    "@types/jquery": "^3.5.10"
+  },
+  "scripts": {
+    "dev": "npx tsc --watch",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "giyyapan",
+  "license": "MIT"
+}
