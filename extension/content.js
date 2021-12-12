@@ -1,4 +1,5 @@
 "use strict";
+var CONTENTEDITABLE_SELECTOR = '[contenteditable=true]';
 var helpers = {
     isSpace: function (char) {
         return /\s/.test(char);
@@ -8,10 +9,41 @@ var helpers = {
             return ['block', 'flex'].indexOf(el.style.display) > -1;
         }
         return false;
+    },
+    findSelectableInNode: function (node) {
+        var contentEditableList = [];
+        var res = node.nodeType == Node.TEXT_NODE ?
+            $(node) : $(node).find("*").addBack().contents().filter(function () {
+            if (this.isContentEditable) {
+                contentEditableList.push(this);
+            }
+            return this.nodeType == Node.TEXT_NODE;
+        });
+        if (res.length == 0) {
+            return $(contentEditableList);
+        }
+        return res;
+    },
+    eachSelfAndParents: function (node, handler) {
+        return $($(node).parents().addBack().toArray().reverse()).each(handler);
+    },
+    isEditable: function (node) {
+        if (node.nodeType == Node.TEXT_NODE) {
+            return true;
+        }
+        if (node instanceof HTMLElement) {
+            if (node.isContentEditable) {
+                return true;
+            }
+            if (node.querySelectorAll(CONTENTEDITABLE_SELECTOR).length > 0) {
+                return true;
+            }
+        }
+        return false;
     }
 };
-var App = (function () {
-    function App() {
+var EditorBuddyContent = (function () {
+    function EditorBuddyContent() {
         var _this = this;
         this.win = window;
         window.onkeydown = function (e) {
@@ -42,29 +74,26 @@ var App = (function () {
         };
         console.log('ready');
     }
-    App.prototype.moveToEndOfLine = function () {
+    EditorBuddyContent.prototype.moveToEndOfLine = function () {
         throw new Error("Method not implemented.");
     };
-    App.prototype.moveToStartOfLine = function () {
+    EditorBuddyContent.prototype.moveToStartOfLine = function () {
         throw new Error("Method not implemented.");
     };
-    App.prototype.moveUp = function () {
+    EditorBuddyContent.prototype.moveUp = function () {
         this.moveCursorVertically(-1);
     };
-    App.prototype.moveDown = function () {
+    EditorBuddyContent.prototype.moveDown = function () {
         this.moveCursorVertically(1);
     };
-    App.prototype.moveLeft = function (byWord) {
+    EditorBuddyContent.prototype.moveLeft = function (byWord) {
         this.moveCursorHorizontally(-1, byWord);
     };
-    App.prototype.moveRight = function (byWord) {
+    EditorBuddyContent.prototype.moveRight = function (byWord) {
         this.moveCursorHorizontally(1, byWord);
     };
-    App.prototype.moveCursorVertically = function (direction) {
-        console.log('move caret horizontally', direction);
-    };
-    App.prototype.moveCursorHorizontally = function (direction, byWord) {
-        console.log('move caret horizontally', direction, byWord);
+    EditorBuddyContent.prototype.moveCursorVertically = function (direction) {
+        console.log('move cursor vertically', direction);
         var sel = this.win.getSelection();
         if (!sel || sel.rangeCount <= 0) {
             return;
@@ -73,7 +102,16 @@ var App = (function () {
         if (!(textNode instanceof Text)) {
             return;
         }
-        if (direction == 1 && sel.focusOffset >= textNode.length) {
+    };
+    EditorBuddyContent.prototype.moveCursorHorizontally = function (direction, byWord) {
+        console.log('move cursor horizontally', direction, byWord);
+        var sel = this.win.getSelection();
+        if (!sel || sel.rangeCount <= 0) {
+            return;
+        }
+        var node = sel.focusNode;
+        var text = node instanceof HTMLElement ? node.innerText : node.nodeValue;
+        if (direction == 1 && sel.focusOffset >= text.length) {
             this.moveToNextNode(sel, byWord);
             return;
         }
@@ -83,7 +121,6 @@ var App = (function () {
         }
         var offset = -1;
         if (byWord) {
-            var text = textNode.nodeValue;
             var wordMarks = this.findWordMarks(text, direction);
             if (direction == 1) {
                 for (var i = 0; i < wordMarks.length; i++) {
@@ -111,17 +148,16 @@ var App = (function () {
         else {
             offset = sel.focusOffset + direction;
         }
-        sel.collapse(textNode, offset);
+        sel.collapse(node, offset);
     };
-    App.prototype.moveToPreviousNode = function (sel, byWord) {
-        var focusNode = sel.focusNode;
-        var sameLine = true;
+    EditorBuddyContent.prototype.moveToPreviousNode = function (sel, byWord) {
+        var sameBlock = true;
         var node = null;
-        $($(focusNode).parents().addBack().toArray().reverse()).each(function () {
+        helpers.eachSelfAndParents(sel.focusNode, function () {
             if (helpers.isBlock(this)) {
-                sameLine = false;
+                sameBlock = false;
             }
-            if (this.previousSibling) {
+            if (this.previousSibling && helpers.isEditable(this.previousSibling)) {
                 node = this.previousSibling;
                 return false;
             }
@@ -129,47 +165,51 @@ var App = (function () {
         if (!node) {
             return;
         }
-        var text = node.nodeType == Node.TEXT_NODE ?
-            node : $(node).find("*").addBack().contents().filter(function () {
-            return this.nodeType == Node.TEXT_NODE && this.nodeValue.length > 0;
-        }).last()[0];
-        if (!text) {
+        var selectable = helpers.findSelectableInNode(node).last()[0];
+        if (!selectable) {
+            this.moveToPreviousNode(sel, byWord);
             return;
         }
-        sel.collapse(text, text.nodeValue.length);
-        if (sameLine) {
+        var len = selectable instanceof HTMLElement ? selectable.innerText.length : selectable.nodeValue.length;
+        sel.collapse(selectable, len);
+        if (sameBlock) {
             this.moveLeft(byWord);
         }
     };
-    App.prototype.moveToNextNode = function (sel, byWord) {
+    EditorBuddyContent.prototype.moveToNextNode = function (sel, byWord) {
+        var sameBlock = true;
         var focusNode = sel.focusNode;
-        var sameLine = true;
-        var node = null;
-        $($(focusNode).parents().addBack().toArray().reverse()).each(function () {
-            if (helpers.isBlock(this)) {
-                sameLine = false;
+        var selectable = null;
+        selectable = helpers
+            .findSelectableInNode(focusNode)
+            .filter(function () { return this != focusNode; })[0];
+        if (!selectable) {
+            var node_1 = null;
+            helpers.eachSelfAndParents(focusNode, function () {
+                if (helpers.isBlock(this)) {
+                    sameBlock = false;
+                }
+                if (this.nextSibling && helpers.isEditable(this.nextSibling)) {
+                    node_1 = this.nextSibling;
+                    return false;
+                }
+            });
+            if (!node_1) {
+                return;
             }
-            if (this.nextSibling) {
-                node = this.nextSibling;
-                return false;
+            node_1 = node_1;
+            selectable = helpers.findSelectableInNode(node_1)[0];
+            if (!selectable) {
+                this.moveToNextNode(sel, byWord);
+                return;
             }
-        });
-        if (!node) {
-            return;
         }
-        var text = node.nodeType == Node.TEXT_NODE ?
-            node : $(node).find("*").addBack().contents().filter(function () {
-            return this.nodeType == Node.TEXT_NODE && this.nodeValue.length > 0;
-        })[0];
-        if (!text) {
-            return;
-        }
-        sel.collapse(text, 0);
-        if (sameLine) {
+        sel.collapse(selectable, 0);
+        if (sameBlock) {
             this.moveRight(byWord);
         }
     };
-    App.prototype.findWordMarks = function (text, direction) {
+    EditorBuddyContent.prototype.findWordMarks = function (text, direction) {
         var wordMarks = [];
         var wordStarted = !helpers.isSpace(text[0]);
         for (var i = 0; i < text.length; i++) {
@@ -187,6 +227,6 @@ var App = (function () {
         }
         return wordMarks;
     };
-    return App;
+    return EditorBuddyContent;
 }());
-new App();
+new EditorBuddyContent();

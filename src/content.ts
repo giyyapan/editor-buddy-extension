@@ -1,6 +1,7 @@
 // helpers
 
 type Direction = 1 | -1
+const CONTENTEDITABLE_SELECTOR = '[contenteditable=true]'
 
 const helpers = {
     isSpace(char: string) {
@@ -12,10 +13,53 @@ const helpers = {
             return ['block', 'flex'].indexOf(el.style.display) > -1
         }
         return false
+    },
+
+    findSelectableInNode(node: Node) {
+        const contentEditableList: HTMLElement[] = []
+        // Use .addBack() to include self
+        const res = (node as Node).nodeType == Node.TEXT_NODE ?
+            $(node) : $(node).find("*").addBack().contents().filter(function () {
+                if ((this as HTMLElement).isContentEditable) {
+                    contentEditableList.push(this as HTMLElement)
+                }
+                return this.nodeType == Node.TEXT_NODE
+            })
+        if (res.length == 0) {
+            return $(contentEditableList)
+        }
+        return res
+    },
+
+    eachSelfAndParents(node: Node, handler: (this: HTMLElement, index: number, element: HTMLElement) => void | false) {
+        return $($(node).parents().addBack().toArray().reverse()).each(
+            handler
+            // function (index, element) {
+            //     if (this instanceof HTMLElement && !this.isContentEditable) {
+            //         return false
+            //     }
+            //     return handler.call(this, index, element)
+            // }
+        )
+    },
+
+    isEditable(node: Node) {
+        if (node.nodeType == Node.TEXT_NODE) {
+            return true
+        }
+        if (node instanceof HTMLElement) {
+            if (node.isContentEditable) {
+                return true
+            }
+            if (node.querySelectorAll(CONTENTEDITABLE_SELECTOR).length > 0) {
+                return true
+            }
+        }
+        return false
     }
 }
 
-class App {
+class EditorBuddyContent {
     win: Window
     constructor() {
         this.win = window
@@ -48,27 +92,27 @@ class App {
         console.log('ready')
     }
 
-    moveToEndOfLine() {
+    public moveToEndOfLine() {
         throw new Error("Method not implemented.");
     }
 
-    moveToStartOfLine() {
+    public moveToStartOfLine() {
         throw new Error("Method not implemented.");
     }
 
-    moveUp() {
+    public moveUp() {
         this.moveCursorVertically(-1)
     }
 
-    moveDown() {
+    public moveDown() {
         this.moveCursorVertically(1)
     }
 
-    moveLeft(byWord: boolean) {
+    public moveLeft(byWord: boolean) {
         this.moveCursorHorizontally(-1, byWord)
     }
 
-    moveRight(byWord: boolean) {
+    public moveRight(byWord: boolean) {
         this.moveCursorHorizontally(1, byWord)
     }
 
@@ -76,15 +120,8 @@ class App {
      * @param direction: 1 for down, -1 for up
      */
     private moveCursorVertically(direction: Direction) {
-        console.log('move caret horizontally', direction)
-    }
-
-    /** 
-     * @param direction: 1 for forward, -1 for backward
-     */
-    private moveCursorHorizontally(direction: Direction, byWord: boolean) {
-        console.log('move caret horizontally', direction, byWord)
-        const sel = this.win.getSelection();
+        console.log('move cursor vertically', direction)
+        const sel = this.win.getSelection()
         if (!sel || sel.rangeCount <= 0) {
             return
         }
@@ -92,7 +129,25 @@ class App {
         if (!(textNode instanceof Text)) {
             return
         }
-        if (direction == 1 && sel.focusOffset >= textNode.length) {
+
+    }
+
+    /** 
+     * @param direction: 1 for forward, -1 for backward
+     * @param byWord: move by a word or a character
+     */
+    private moveCursorHorizontally(direction: Direction, byWord: boolean) {
+        console.log('move cursor horizontally', direction, byWord)
+        const sel = this.win.getSelection();
+        if (!sel || sel.rangeCount <= 0) {
+            return
+        }
+        const node = sel.focusNode!
+        // if (!(textNode instanceof Text)) {
+        //     return
+        // }
+        const text = node instanceof HTMLElement ? node.innerText : node.nodeValue!
+        if (direction == 1 && sel.focusOffset >= text.length) {
             this.moveToNextNode(sel, byWord)
             return
         }
@@ -102,7 +157,6 @@ class App {
         }
         let offset = -1
         if (byWord) {
-            const text = textNode.nodeValue!
             const wordMarks = this.findWordMarks(text, direction)
             if (direction == 1) {
                 // forward
@@ -130,18 +184,17 @@ class App {
         } else {
             offset = sel.focusOffset + direction
         }
-        sel.collapse(textNode, offset);
+        sel.collapse(node, offset);
     }
 
     private moveToPreviousNode(sel: Selection, byWord: boolean) {
-        let focusNode = sel.focusNode!
-        let sameLine = true
+        let sameBlock = true
         let node: Node | null = null
-        $($(focusNode).parents().addBack().toArray().reverse()).each(function () {
+        helpers.eachSelfAndParents(sel.focusNode!, function () {
             if (helpers.isBlock(this)) {
-                sameLine = false
+                sameBlock = false
             }
-            if (this.previousSibling) {
+            if (this.previousSibling && helpers.isEditable(this.previousSibling)) {
                 node = this.previousSibling
                 return false
             }
@@ -149,46 +202,48 @@ class App {
         if (!node) {
             return
         }
-        // Use .addBack() to include self
-        const text = (node as Node).nodeType == Node.TEXT_NODE ?
-            node : $(node).find("*").addBack().contents().filter(function () {
-                return this.nodeType == Node.TEXT_NODE && this.nodeValue!.length > 0
-            }).last()[0]
-        if (!text) {
+        const selectable = helpers.findSelectableInNode(node).last()[0]
+        if (!selectable) {
+            this.moveToPreviousNode(sel, byWord)
             return
         }
-        sel.collapse(text, text.nodeValue!.length)
-        if (sameLine) {
+        const len = selectable instanceof HTMLElement ? selectable.innerText.length : selectable.nodeValue!.length
+        sel.collapse(selectable, len)
+        if (sameBlock) {
             this.moveLeft(byWord)
         }
     }
 
     private moveToNextNode(sel: Selection, byWord: boolean) {
-        let focusNode = sel.focusNode!
-        let sameLine = true
-        let node: Node | null = null
-        $($(focusNode).parents().addBack().toArray().reverse()).each(function () {
-            if (helpers.isBlock(this)) {
-                sameLine = false
+        let sameBlock = true
+        const focusNode = sel.focusNode!
+        let selectable: Node | null = null
+        selectable = helpers
+            .findSelectableInNode(focusNode)
+            .filter(function () { return this != focusNode })[0]
+        if (!selectable) {
+            let node: Node | null = null
+            helpers.eachSelfAndParents(focusNode, function () {
+                if (helpers.isBlock(this)) {
+                    sameBlock = false
+                }
+                if (this.nextSibling && helpers.isEditable(this.nextSibling)) {
+                    node = this.nextSibling
+                    return false
+                }
+            })
+            if (!node) {
+                return
             }
-            if (this.nextSibling) {
-                node = this.nextSibling
-                return false
+            node = node as Node
+            selectable = helpers.findSelectableInNode(node)[0]
+            if (!selectable) {
+                this.moveToNextNode(sel, byWord)
+                return
             }
-        })
-        if (!node) {
-            return
         }
-        // Use .addBack() to include self
-        const text = (node as Node).nodeType == Node.TEXT_NODE ?
-            node : $(node).find("*").addBack().contents().filter(function () {
-                return this.nodeType == Node.TEXT_NODE && this.nodeValue!.length > 0
-            })[0]
-        if (!text) {
-            return
-        }
-        sel.collapse(text, 0)
-        if (sameLine) {
+        sel.collapse(selectable, 0)
+        if (sameBlock) {
             this.moveRight(byWord)
         }
     }
@@ -215,4 +270,4 @@ class App {
     }
 }
 
-new App()
+new EditorBuddyContent()
